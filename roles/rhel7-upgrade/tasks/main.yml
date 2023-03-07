@@ -1,0 +1,44 @@
+---
+# tasks file for rhel7-upgrade
+- name: Enable a RHSM repository
+  rhsm_repository:
+    name: rhel-7-server-extras-rpms
+
+- name: Update all packages to latest version
+  yum:
+    name: "*"
+    state: latest
+
+- name: Reboot host and wait for it to restart
+  reboot:
+    msg: "Rebooting the system to complete the upgrade"
+    connect_timeout: 5
+    reboot_timeout: 600
+    pre_reboot_delay: 0
+    post_reboot_delay: 30
+    test_command: whoami
+
+- name: Install leapp package
+  yum:
+    name: leapp
+    state: present
+
+- name: Disable unsupport device drivers  for the upgrade
+  shell: rmmod floppy;  rmmod pata_acpi
+
+- name: Create leapp answerfile for the upgrade
+  ansible.builtin.template:
+    src: answerfile.j2
+    dest: /var/log/leapp/answerfile
+
+- name: Perform the upgrade
+  shell: leapp upgrade
+
+- name: Reboot host and wait for it to restart
+  reboot:
+    msg: "Rebooting the system to complete the upgrade"
+    connect_timeout: 5
+    reboot_timeout: 600
+    pre_reboot_delay: 0
+    post_reboot_delay: 30
+    test_command: whoami

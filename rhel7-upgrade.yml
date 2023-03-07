@@ -1,0 +1,5 @@
+- name: Upgrade RHEL 7 to RHEL 8
+  hosts: localhost
+  become: true
+  roles:
+    - rhel7-upgrade
