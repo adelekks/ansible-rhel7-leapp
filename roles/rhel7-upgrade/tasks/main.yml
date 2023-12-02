@@ -1,39 +1,275 @@
 ---
-# tasks file for rhel7-upgrade
-- name: Enable a RHSM repository
-  rhsm_repository:
-    name: rhel-7-server-extras-rpms
+- name: "Check if iso exists"
+  stat:
+    path: "/var/tmp/iso"
+  register: result_iso_ck
 
-- name: Update all packages to latest version
-  yum:
-    name: "*"
+- name: GET ISO info from FSTAB
+  shell: "cat /etc/fstab | grep mnt | awk -F 'iso' '{print $2}' | awk -F '/' '{print $2}'"
+  register: result_iso
+
+- name: Print return information from the previous task
+  ansible.builtin.debug:
+    var: result_iso.stdout_lines
+
+- name: Comment out any ISO
+  raw: sed -i "/{{ item }}/s/^/#/g" /etc/fstab
+  args:
+    executable: /bin/bash
+  with_items: "{{ result_iso.stdout_lines }}"
+  when: not result_iso_ck.stat.exists
+
+- name: UMount ISO
+  mount:
+    path: /mnt
+    state: unmounted
+    
+- name: Create iso backup file
+  ansible.builtin.file:
+    path: /var/tmp/iso
+    state: touch
+  when: not result_iso_ck.stat.exists
+              
+- name: "Check if NFS exists"
+  stat:
+    path: "/var/tmp/nfs"
+  register: result_nfs_ck
+
+- name: GET NFS info from FSTAB
+  shell: "cat /etc/fstab | grep nfs | awk -F ':' '{print $2}' |awk -F '/' '{print $2}'"
+  register: result_nfs
+
+- name: Print return information from the previous task
+  ansible.builtin.debug:
+    var: result_nfs.stdout_lines
+  
+- name: GET NFS info from EXPORTS
+  shell: "cat /etc/exports |awk -F '/' '{print $2}'"
+  register: result_export
+  
+- name: Print return information from the previous task
+  ansible.builtin.debug:
+    var: result_export.stdout_lines
+
+- name: Comment out any NFS
+  raw: sed -i "/{{ item }}/s/^/#/g" /etc/fstab
+  args:
+    executable: /bin/bash
+  with_items: "{{ result_nfs.stdout_lines }}"
+  when: not result_nfs_ck.stat.exists
+
+- name: Create nfs backup file
+  ansible.builtin.file:
+    path: /var/tmp/nfs
+    state: touch
+  when: not result_nfs_ck.stat.exists
+
+- name: "Check if export file exist"
+  stat:
+    path: "/var/tmp/export"
+  register: result_export_ck
+
+- name: Comment out any EXPORTS
+  raw: sed -i "/{{ item }}/s/^/#/g" /etc/exports
+  args:
+    executable: /bin/bash
+  with_items: "{{ result_export.stdout_lines }}"
+  when: not result_export_ck.stat.exists
+
+- name: Create export backup file
+  ansible.builtin.file:
+    path: /var/tmp/export
+    state: touch
+  when: not result_export_ck.stat.exists
+        
+- name: "Check if informix DB is Installed"
+  stat:
+    path: "/etc/init.d/informix"
+  register: result_db
+
+- name: Stop DB service if running
+  ansible.builtin.service:
+    name: informix 
+    state: stopped
+  when: result_db.stat.exists 
+        
+- name: "Check if repo-backup directory exists"
+  stat:
+    path: "/etc/yum.repos.d/repo-backup"
+  register: result_backup
+
+- name: Create a directory if it does not exist
+  ansible.builtin.file:
+    path: /etc/yum.repos.d/repo-backup
+    state: directory   
+  when: not result_backup.stat.exists
+ 
+- name: "Check if repo-backup file exists"
+  stat:
+    path: "/var/tmp/repo_backup"
+  register: result_repobackup
+          
+- name: Clean out repo for any old repo files
+  shell: mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/repo-backup
+  args: 
+  when: not result_repobackup.stat.exists
+  ignore_errors: yes    
+
+- name: Create repo backup file 
+  ansible.builtin.file:
+    path: /var/tmp/repo_backup
+    state: touch
+  when: not result_repobackup.stat.exists
+              
+- name: Create Rhel7 Core Repo 
+  ansible.builtin.template:
+    src: rhel7core.repo.j2
+    dest: /etc/yum.repos.d/rhel7core.repo
+
+- name: remove all AO custom rpm
+  ansible.builtin.yum:
+    name:
+      - zabbix-agent
+      - splunkforwarder
+      - ds_agent
+      - BESClientDeployTool
+      - BESAgent
+      - VRTSnbclt
+      - VRTSpddea
+      - VRTSpbx
+      - VRTSnbpck
+      - VRTSnbjre
+      - VRTSnbjava
+      - VRTSnbcfg
+    state: absent
+  ignore_errors: yes
+                
+- name: Install leapp and grub2 package 
+  ansible.builtin.yum:
+    name: 
+      - leapp-upgrade
+      - grub2 
+      - grub2-tools
+      - grubby
+      - python3
+      - xfsprogs
     state: latest
-
-- name: Reboot host and wait for it to restart
-  reboot:
-    msg: "Rebooting the system to complete the upgrade"
-    connect_timeout: 5
-    reboot_timeout: 600
-    pre_reboot_delay: 0
-    post_reboot_delay: 30
-    test_command: whoami
-
-- name: Install leapp package
-  yum:
-    name: leapp
-    state: present
-
-- name: Disable unsupport device drivers  for the upgrade
-  shell: rmmod floppy;  rmmod pata_acpi
-
+  
 - name: Create leapp answerfile for the upgrade
   ansible.builtin.template:
     src: answerfile.j2
     dest: /var/log/leapp/answerfile
 
-- name: Perform the upgrade
-  shell: leapp upgrade
+#- name: Extract leapp-data-22.tar.gz into /etc/leapp/files
+#  ansible.builtin.unarchive:
+#    src: leapp-data-22.tar.gz
+#    dest: /etc/leapp/files
 
+#- name: Create custom actor file
+#  ansible.builtin.template:
+#    src: actor.py.j2
+#    dest: /usr/share/leapp-repository/repositories/system_upgrade/common/actors/redhatsignedrpmscanner
+#    mode: 0644
+     
+- name: Create Rhel8 Repo 
+  ansible.builtin.template:
+    src: rhel8.repo.j2
+    dest: /etc/yum.repos.d/rhel8.repo
+
+- name: "Check if grub exists"
+  stat:
+    path: "/var/tmp/grub.cfg"
+  register: result_grub
+
+- name: Install GRUB2 to the device determined in the previous step
+  shell: grub2-install /dev/sda
+  when: not result_grub.stat.exists
+
+- name: Create bash script for grub
+  ansible.builtin.template:
+    src: script.sh.j2
+    dest: /tmp/script.sh
+      
+#- name: Create a good /etc/default/grub file
+#  shell: chmod +x /tmp/script.sh; /tmp/script.sh
+#  when: not result_grub.stat.exists
+#  become: true
+  
+- name: Change file ownership, group and permissions
+  ansible.builtin.file:
+    path: /tmp/script.sh
+    mode: '+x'  
+  become: true
+
+- name: Create a good /etc/default/grub file
+  shell: sh /tmp/script.sh
+  when: not result_grub.stat.exists
+  become: true 
+    
+- name: Build the new GRUB2 config file
+  shell: grub2-mkconfig -o /boot/grub2/grub.cfg
+  args:
+    creates: /var/tmp/grub.cfg
+  when: not result_grub.stat.exists
+  
+- name: Create grub.cfg file 
+  ansible.builtin.file:
+    path: /var/tmp/grub.cfg
+    state: touch
+  when: not result_grub.stat.exists
+   
+- name: "Check if ssh_config exists"
+  stat:
+    path: "/var/tmp/ssh_config"
+  register: result_ssh 
+
+- name: Backup ssh config file for upgrade
+  shell: cp /etc/ssh/sshd_config /etc/ssh/sshd_config.ansible
+  args: 
+  when: not result_ssh.stat.exists
+        
+- name: Disable Ciphers ones
+  lineinfile: 
+    dest: /etc/ssh/sshd_config 
+    regexp: '^Ciphers' 
+    state: absent
+    backup: yes  
+  when: not result_ssh.stat.exists
+- lineinfile: 
+    dest: /etc/ssh/sshd_config 
+    regexp: '^KexAlgorithms'
+    state: absent
+  when: not result_ssh.stat.exists
+ 
+- lineinfile: 
+    dest: /etc/ssh/sshd_config 
+    regexp: '^MACs'
+    state: absent
+  when: not result_ssh.stat.exists
+        
+- name: Enable Root Login
+  lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: '^PermitRootLogin'
+        line: "PermitRootLogin yes"
+        state: present
+  when: not result_ssh.stat.exists
+
+- name: Start service sshd
+  ansible.builtin.service:
+    name: sshd
+    state: started
+    
+- name: Create ssh_config file 
+  ansible.builtin.file:
+    path: /var/tmp/ssh_config
+    state: touch
+
+- name: "Check if reboot exists"
+  stat:
+    path: "/var/tmp/reboot"
+  register: result_reboot
+        
 - name: Reboot host and wait for it to restart
   reboot:
     msg: "Rebooting the system to complete the upgrade"
@@ -42,3 +278,170 @@
     pre_reboot_delay: 0
     post_reboot_delay: 30
     test_command: whoami
+  when: not result_reboot.stat.exists
+  
+- name: Create reboot file 
+  ansible.builtin.file:
+    path: /var/tmp/reboot
+    state: touch
+    
+- name: Delete grub1 directory
+  file:
+    state: absent
+    path: /boot/grub
+  when: not result_reboot.stat.exists
+
+- name: Disable unsupport device drivers  for the upgrade
+  shell: rmmod floppy;  rmmod pata_acpi; sysctl kernel.core_pattern=core
+
+- name: UMount ISO
+  mount:
+    path: /mnt
+    state: unmounted
+                                                
+- name: Perform the upgrade
+  ansible.builtin.shell: |
+         leapp answer --section remove_pam_pkcs11_module_check.confirm=True
+         leapp upgrade --no-rhsm --enablerepo baseos --enablerepo appstream
+  async: 10000
+  poll: 60       
+      
+- name: Reboot host and wait for it to restart
+  reboot:
+    msg: "Rebooting the system to complete the upgrade"
+    connect_timeout: 120
+    reboot_timeout: 4800
+    pre_reboot_delay: 0
+    post_reboot_delay: 240
+    test_command: whoami
+    
+- name: Restore ssh config file after upgrade
+  shell: cp /etc/ssh/sshd_config.ansible /etc/ssh/sshd_config
+  
+- lineinfile: 
+    dest: /etc/ssh/sshd_config 
+    regexp: '^MACs'
+    state: absent
+  when: not result_ssh.stat.exists  
+
+- name: "Check if informix DB is Installed"
+  stat:
+    path: "/etc/init.d/informix"
+  register: result_db
+
+- name: Start DB service if running
+  ansible.builtin.service:
+    name: informix 
+    state: started
+  when: result_db.stat.exists
+
+- name: Uncomment out any NFS
+  raw: sed -i "/{{ item }}/s/^#//g" /etc/fstab
+  with_items:
+    - "{{ result_nfs.stdout_lines }}"
+  when: not result_nfs_ck.stat.exists
+  
+- name: Uncomment out any EXPORTS
+  raw: sed -i "/{{ item }}/s/^#//g" /etc/exports
+  with_items:
+    - "{{ result_export.stdout_lines }}"
+  when: not result_export_ck.stat.exists
+
+- name: Diable Root Login
+  lineinfile:
+        dest: /etc/ssh/sshd_config
+        regexp: '^PermitRootLogin'
+        line: "PermitRootLogin no"
+        state: present
+  notify:
+    - restart ssh 
+
+#######
+
+- name: "Check if Zabbix is Installed"
+  stat:
+    path: "/usr/lib/systemd/system/zabbix-agent.service"
+  register: zabbix
+  ignore_errors: yes  
+
+- name: Start Zabbix if running
+  ansible.builtin.service:
+    name: zabbix-agent
+    state: started
+  when: zabbix.stat.exists
+  ignore_errors: yes  
+
+- name: "Check if Splunk is Installed"
+  stat:
+    path: "/etc/systemd/system/SplunkForwarder.service"
+  register: splunk
+  ignore_errors: yes  
+
+- name: Start Splunk if running
+  ansible.builtin.service:
+    name: SplunkForwarder
+    state: started
+  when: splunk.stat.exists
+  ignore_errors: yes  
+
+- name: "Check if Nessus is Installed"
+  stat:
+    path: "/usr/lib/systemd/system/nessusagent.service"
+  register: nessus
+  ignore_errors: yes  
+
+- name: Start Nessus if running
+  ansible.builtin.service:
+    name: nessusagent
+    state: started
+  when: nessus.stat.exists
+  ignore_errors: yes  
+
+- name: "Check if Deep Security is Installed"
+  stat:
+    path: "/usr/lib/systemd/system/ds_agent.service"
+  register: deep_security
+  ignore_errors: yes  
+
+- name: Start Deep Security if running
+  ansible.builtin.service:
+    name: ds_agent
+    state: started
+  when: deep_security.stat.exists
+  ignore_errors: yes  
+ 
+- name: "Check if Netbackup is Installed"
+  stat:
+    path: "/etc/init.d/netbackup"
+  register: netbackup
+  ignore_errors: yes  
+
+- name: Start Netbackup if running
+  ansible.builtin.service:
+    name: netbackup
+    state: started
+  when: netbackup.stat.exists
+  ignore_errors: yes  
+
+#### Install Infomix DB
+#- name: Conditional role to start Infomix DB
+#  ansible.builtin.include_role:
+#    name: infomix-db
+#  when: result_db.stat.exists
+     
+- name: Clean up 
+  file:
+    path: '{{ item }}'
+    state: absent
+  with_items:
+    - /var/tmp/repo_backup
+    - /var/tmp/grub.cfg
+    - /tmp/script.sh
+    - /var/tmp/ssh_config
+    - /var/tmp/reboot
+    - /etc/yum.repos.d/rhel7core.repo
+    - /etc/yum.repos.d/rhel8.repo
+    - /var/tmp/nfs
+    - /var/tmp/export
+    - /var/tmp/iso
+

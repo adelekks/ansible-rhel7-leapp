@@ -1,0 +1,12 @@
+#!/bin/bash
+
+#Create a good /etc/default/grub file
+cat >/etc/default/grub <<EOF
+GRUB_TIMEOUT=5
+GRUB_DISTRIBUTOR="\$(sed 's, release .*$,,g' /etc/system-release)"
+GRUB_DEFAULT=saved
+GRUB_DISABLE_SUBMENU=true
+GRUB_TERMINAL_OUTPUT="console"
+GRUB_CMDLINE_LINUX="$(grep '^\s*kernel /vmlinuz-3' /boot/grub/grub.conf | head -1 | sed -r -e 's,^\s*kernel /vmlinuz\S+ ,,' -e 's,\<root=\S+ ,,' -e 's,\<ro ,,')"
+GRUB_DISABLE_RECOVERY="true"
+EOF
